@@ -60,6 +60,57 @@ node ..\..\bin\hypit.mjs runtime up               # 准备浏览器与本地程�
 `plan` 报告 `Preflight needs attention` 属预期：`hypihub.default` 端点需要 HypiHub 凭据。
 纯代码渲染、字幕、本地媒体系处理不需要该凭据。
 
+### Chrome Headless Shell 手动安装（本机必做）
+
+`hypit runtime up` 首次会下载 Chrome Headless Shell，本机直连 Google 存储超时失败
+（265s 后 `Failed`，日志在
+`C:\Users\郭宸昊\.cache\hypit\html-rasterizer\chrome\.hypit-html-browser-program\install.log`）。
+Worker 不继承 shell 的代理变量，因此必须手动放入：
+
+```powershell
+$env:HTTPS_PROXY="http://127.0.0.1:7890"
+$d="C:\Users\郭宸昊\.cache\hypit\html-rasterizer\chrome\chrome-headless-shell\win64-152.0.7928.2"
+curl.exe -sSL --proxy $env:HTTPS_PROXY --retry 5 --retry-all-errors --max-time 900 `
+  -o _tools\chs.zip `
+  "https://storage.googleapis.com/chrome-for-testing-public/152.0.7928.2/win64/chrome-headless-shell-win64.zip"
+Expand-Archive _tools\chs.zip -DestinationPath $d -Force
+Remove-Item "C:\Users\郭宸昊\.cache\hypit\html-rasterizer\chrome\.hypit-html-browser-program\lifecycle.lock" -Force
+node bin/hypit.mjs runtime up
+```
+
+两个坑：
+1. `curl` 会报 `(56) schannel: server closed abruptly`，这是代理侧的 close_notify 缺失，
+   报文本身完整——判断依据是解压条目数（290 条）与 `chrome-headless-shell --version`，
+   不要只看 curl 退出码。截断的 80 MB 包会报「找不到中央目录结尾记录」。
+2. 残留 `lifecycle.lock` 会让运行时认为安装仍在进行，必须删除后再 `runtime up`。
+
+修复后 `hypit runtime status` 输出 `✓ Local Runtime ready / Worker running / Programs 2/2 ready`，
+`hypit doctor` 只剩 `RUNTIME_CREDENTIAL_MISSING`（HypiHub 未登录，属预期）。
+
+## 3.5 端到端验证（纯本地，零 Provider 费用）
+
+`examples/semantic-composition` 不调用任何生成模型，是验证整条渲染链的最佳用例：
+
+```powershell
+node _tools/pnpm/package/bin/pnpm.cjs build:public-types
+node _tools/pnpm/package/bin/pnpm.cjs --filter @example/chat-scene build
+node bin/hypit.mjs check  examples/semantic-composition/chat.svml --project examples/semantic-composition
+node bin/hypit.mjs build  examples/semantic-composition/chat.svrun --project examples/semantic-composition `
+  --runtime examples/semantic-composition/hypit.runtime.json --follow
+node bin/hypit.mjs get <build-id> --output final.video --project examples/semantic-composition --to out-chat.mp4
+```
+
+实测结果（2026-11-02）：
+
+| 项 | 值 |
+|---|---|
+| Build | `bld_20261102T060842477Z_7932189202`，`Outcome complete` |
+| 请求数 | 3（全部本地） |
+| 渲染 | 240 帧，本地 Chromium 光栅化，23 秒 |
+| 成片 | `out-chat.mp4`，82 075 字节 |
+| 规格 | 540×960 / 30fps / 240 帧 / 8.0s / H.264 + AAC |
+| 画面 | `proof-frame.png`，三条聊天气泡按编排时间入场，字体与配色正常 |
+
 ## 4. GitHub Actions
 
 fork 上的工作流默认处于「仅手动」状态，首次 push 不会自动运行。已处理：
